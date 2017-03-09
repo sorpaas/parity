@@ -279,6 +279,7 @@ lazy_static! {
 		arr[CALLCODE as usize] =		InstructionInfo::new("CALLCODE",		0, 7, 1, true, GasPriceTier::Special);
 		arr[RETURN as usize] =			InstructionInfo::new("RETURN",			0, 2, 0, true, GasPriceTier::Zero);
 		arr[DELEGATECALL as usize] =	InstructionInfo::new("DELEGATECALL",	0, 6, 1, true, GasPriceTier::Special);
+		arr[STATICCALL as usize] =		InstructionInfo::new("STATICCALL",		0, 6, 1, true, GasPriceTier::Special);
 		arr[SUICIDE as usize] = 		InstructionInfo::new("SUICIDE",			0, 1, 0, true, GasPriceTier::Special);
 		arr[CREATE2 as usize] = 		InstructionInfo::new("CREATE2",			0, 3, 1, true, GasPriceTier::Special);
 		arr[REVERT as usize] =			InstructionInfo::new("REVERT",			0, 2, 0, true, GasPriceTier::Zero);
@@ -565,6 +566,8 @@ pub const DELEGATECALL: Instruction = 0xf4;
 pub const CREATE2: Instruction = 0xfb;
 /// stop execution and revert state changes. Return output data.
 pub const REVERT: Instruction = 0xfd;
+/// like CALL but it does not take value, nor modify the state
+pub const STATICCALL: Instruction = 0xfa;
 /// halt execution and register account for later deletion
 pub const SUICIDE: Instruction = 0xff;
 
