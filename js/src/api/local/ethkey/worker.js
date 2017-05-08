@@ -14,9 +14,85 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
-import secp256k1 from 'secp256k1';
-import { keccak_256 as keccak256 } from 'js-sha3';
+/* global WebAssembly */
+
 import { bytesToHex } from '~/api/util/format';
+import Ethkey from './ethkey.wasm';
+
+const NOOP = () => {};
+
+function align (mem) {
+  return (Math.ceil(mem / 8) * 8) | 0;
+}
+
+const WASM_PAGE_SIZE = 65536;
+const STATIC_BASE = 1024;
+const STATICTOP = STATIC_BASE + WASM_PAGE_SIZE * 2;
+const STACK_BASE = align(STATICTOP + 16);
+const STACKTOP = STACK_BASE;
+const DYNAMICTOP_PTR = 0;
+const TOTAL_STACK = 20 * WASM_PAGE_SIZE; // 5242880;
+const TOTAL_MEMORY = 16777216;
+const STACK_MAX = STACK_BASE + TOTAL_STACK;
+const wasmMemory = new WebAssembly.Memory({
+  initial: TOTAL_MEMORY / WASM_PAGE_SIZE,
+  maximum: TOTAL_MEMORY / WASM_PAGE_SIZE
+});
+const wasmTable = new WebAssembly.Table({
+  initial: 8,
+  maximum: 8,
+  element: 'anyfunc'
+});
+const wasmHeap = new Uint8Array(wasmMemory.buffer);
+
+function abort (what) {
+  throw new Error(what || 'WASM abort');
+}
+
+function abortOnCannotGrowMemory () {
+  abort(`Cannot enlarge memory arrays.`);
+}
+
+function enlargeMemory () {
+  abortOnCannotGrowMemory();
+}
+
+function getTotalMemory () {
+  return TOTAL_MEMORY;
+}
+
+function memcpy (dest, src, len) {
+  wasmHeap.set(wasmHeap.subarray(src, src + len), dest);
+
+  return dest;
+}
+
+const ethkey = new Ethkey({
+  global: {},
+  env: {
+    DYNAMICTOP_PTR,
+    STACKTOP,
+    STACK_MAX,
+    abort,
+    enlargeMemory,
+    getTotalMemory,
+    abortOnCannotGrowMemory,
+    ___lock: NOOP,
+    ___syscall6: () => 0,
+    ___setErrNo: (no) => no,
+    _abort: abort,
+    ___syscall140: () => 0,
+    _emscripten_memcpy_big: memcpy,
+    ___syscall54: () => 0,
+    ___unlock: NOOP,
+    _llvm_trap: abort.bind(null, 'trap'),
+    ___syscall146: () => 0,
+    'memory': wasmMemory,
+    'table': wasmTable,
+    tableBase: 0,
+    memoryBase: STATIC_BASE
+  }
+});
 
 const isWorker = typeof self !== 'undefined';
 
@@ -42,43 +118,42 @@ function route ({ action, payload }) {
   return null;
 }
 
+// Don't use malloc, manually set pointers from 4MB range...
+const inputPtr = 1024 * 1024 * 4;
+const secretPtr = inputPtr + 1024;
+const publicPtr = secretPtr + 32;
+const addressPtr = publicPtr + 64;
+const G = addressPtr + 24;
+
+ethkey.exports._ecpointg(G);
+
+const secretBuf = wasmHeap.subarray(secretPtr, secretPtr + 32);
+const publicBuf = wasmHeap.subarray(publicPtr, publicPtr + 64);
+const addressBuf = wasmHeap.subarray(addressPtr, addressPtr + 20);
+
 const actions = {
   phraseToWallet (phrase) {
-    let secret = keccak256.array(phrase);
+    const phraseUtf8 = Buffer.from(phrase, 'utf8');
 
-    for (let i = 0; i < 16384; i++) {
-      secret = keccak256.array(secret);
-    }
+    wasmHeap.set(phraseUtf8, inputPtr);
 
-    while (true) {
-      secret = keccak256.array(secret);
+    ethkey.exports._brain(G, inputPtr, phraseUtf8.length, secretPtr, addressPtr);
 
-      const secretBuf = Buffer.from(secret);
+    const wallet = {
+      secret: bytesToHex(secretBuf),
+      public: bytesToHex(publicBuf),
+      address: bytesToHex(addressBuf)
+    };
 
-      if (secp256k1.privateKeyVerify(secretBuf)) {
-        // No compression, slice out last 64 bytes
-        const publicBuf = secp256k1.publicKeyCreate(secretBuf, false).slice(-64);
-        const address = keccak256.array(publicBuf).slice(12);
-
-        if (address[0] !== 0) {
-          continue;
-        }
-
-        const wallet = {
-          secret: bytesToHex(secretBuf),
-          public: bytesToHex(publicBuf),
-          address: bytesToHex(address)
-        };
-
-        return wallet;
-      }
-    }
+    return wallet;
   },
 
   verifySecret (secret) {
     const key = Buffer.from(secret.slice(2), 'hex');
 
-    return secp256k1.privateKeyVerify(key);
+    wasmHeap.set(key, secretPtr);
+
+    return ethkey.exports._verify_secret(secretPtr);
   },
 
   createKeyObject ({ key, password }) {
@@ -112,7 +187,8 @@ self.onmessage = function ({ data }) {
 
     postMessage([null, result]);
   } catch (err) {
-    postMessage([err, null]);
+    console.error(err);
+    postMessage([err.toString(), null]);
   }
 };
 

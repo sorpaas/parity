@@ -137,8 +137,16 @@ export default class LocalAccountsMiddleware extends Middleware {
       return [];
     });
 
+    register('parity_listOpenedVaults', () => {
+      return [];
+    });
+
     register('parity_listRecentDapps', () => {
       return {};
+    });
+
+    register('parity_listVaults', () => {
+      return [];
     });
 
     register('parity_killAccount', ([address, password]) => {
