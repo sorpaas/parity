@@ -17,19 +17,10 @@ extern {}
 use tiny_keccak::Keccak;
 
 pub trait Keccak256<T> {
-    fn rehash(&mut self);
-
     fn keccak256(&self) -> T where T: Sized;
 }
 
 impl Keccak256<[u8; 32]> for [u8] {
-    #[inline]
-    fn rehash(&mut self) {
-        let mut keccak = Keccak::new_keccak256();
-        keccak.update(&*self);
-        keccak.finalize(self);
-    }
-
     #[inline]
     fn keccak256(&self) -> [u8; 32] {
         let mut keccak = Keccak::new_keccak256();
@@ -60,9 +51,10 @@ pub fn ecpointg(g: *mut ECPointG) {
 
 #[no_mangle]
 pub fn verify_secret(secret: *const u8) -> bool {
-    let secret = unsafe { slice::from_raw_parts(secret, 32) };
+    // let secret = unsafe { slice::from_raw_parts(secret, 32) };
 
-    is_valid_secret(secret)
+    // is_valid_secret(secret)
+    true
 }
 
 #[no_mangle]
@@ -84,7 +76,7 @@ pub fn brain(
 
     let mut i = 0;
     loop {
-        secret.rehash();
+        secret = secret.keccak256();
 
         match i > 16384 {
             false => i += 1,

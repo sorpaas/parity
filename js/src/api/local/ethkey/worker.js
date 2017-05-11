@@ -22,7 +22,7 @@ import Ethkey from './ethkey.wasm';
 const NOOP = () => {};
 
 function align (mem) {
-  return (Math.ceil(mem / 8) * 8) | 0;
+  return (Math.ceil(mem / 16) * 16) | 0;
 }
 
 const WASM_PAGE_SIZE = 65536;
@@ -30,10 +30,14 @@ const STATIC_BASE = 1024;
 const STATICTOP = STATIC_BASE + WASM_PAGE_SIZE * 2;
 const STACK_BASE = align(STATICTOP + 16);
 const STACKTOP = STACK_BASE;
-const DYNAMICTOP_PTR = 0;
-const TOTAL_STACK = 20 * WASM_PAGE_SIZE; // 5242880;
+const TOTAL_STACK = 30 * WASM_PAGE_SIZE; // 5242880;
 const TOTAL_MEMORY = 16777216;
 const STACK_MAX = STACK_BASE + TOTAL_STACK;
+const DYNAMIC_BASE = STACK_MAX + WASM_PAGE_SIZE * 2;
+const DYNAMICTOP_PTR = STACK_MAX;
+
+console.log('static', STATIC_BASE, 'static_top', STATICTOP, 'stack_base', STACK_BASE, 'stack_max', STACK_MAX, 'total', TOTAL_MEMORY);
+
 const wasmMemory = new WebAssembly.Memory({
   initial: TOTAL_MEMORY / WASM_PAGE_SIZE,
   maximum: TOTAL_MEMORY / WASM_PAGE_SIZE
@@ -43,7 +47,11 @@ const wasmTable = new WebAssembly.Table({
   maximum: 8,
   element: 'anyfunc'
 });
+
 const wasmHeap = new Uint8Array(wasmMemory.buffer);
+const wasmHeap32 = new Uint32Array(wasmMemory.buffer);
+
+wasmHeap32[DYNAMICTOP_PTR >> 2] = align(DYNAMIC_BASE);
 
 function abort (what) {
   throw new Error(what || 'WASM abort');
@@ -84,8 +92,8 @@ const ethkey = new Ethkey({
     ___syscall140: () => 0,
     _emscripten_memcpy_big: memcpy,
     ___syscall54: () => 0,
-    ___unlock: NOOP,
-    _llvm_trap: abort.bind(null, 'trap'),
+    ___unlock: () => console.log('unlock'),
+    _llvm_trap: () => abort.bind(null, 'abort: llvm trap'),
     ___syscall146: () => 0,
     'memory': wasmMemory,
     'table': wasmTable,
@@ -119,14 +127,13 @@ function route ({ action, payload }) {
 }
 
 // Don't use malloc, manually set pointers from 4MB range...
-const inputPtr = 1024 * 1024 * 4;
+const inputPtr = STACK_MAX;
 const secretPtr = inputPtr + 1024;
 const publicPtr = secretPtr + 32;
 const addressPtr = publicPtr + 64;
-const G = addressPtr + 24;
+const G = addressPtr + 32;
 
-ethkey.exports._ecpointg(G);
-
+const inputBuf = wasmHeap.subarray(inputPtr, inputPtr + 1024);
 const secretBuf = wasmHeap.subarray(secretPtr, secretPtr + 32);
 const publicBuf = wasmHeap.subarray(publicPtr, publicPtr + 64);
 const addressBuf = wasmHeap.subarray(addressPtr, addressPtr + 20);
@@ -135,8 +142,9 @@ const actions = {
   phraseToWallet (phrase) {
     const phraseUtf8 = Buffer.from(phrase, 'utf8');
 
-    wasmHeap.set(phraseUtf8, inputPtr);
+    inputBuf.set(phraseUtf8);
 
+    ethkey.exports._ecpointg(G);
     ethkey.exports._brain(G, inputPtr, phraseUtf8.length, secretPtr, addressPtr);
 
     const wallet = {
