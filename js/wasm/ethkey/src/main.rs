@@ -11,13 +11,13 @@ extern crate tiny_secp256k1;
 
 use tiny_secp256k1::{is_valid_secret, create_public_key, ECPointG};
 
-#[link_args = "-s EXPORTED_FUNCTIONS=['_verify_secret','_keccak256','_brain','_ecpointg']"]
+#[link_args = "-s EXPORTED_FUNCTIONS=['_verify_secret','_keccak256','_brain']"]
 extern {}
 
 use tiny_keccak::Keccak;
 
-pub trait Keccak256<T> {
-    fn keccak256(&self) -> T where T: Sized;
+pub trait Keccak256<T: Sized> {
+    fn keccak256(&self) -> T;
 }
 
 impl Keccak256<[u8; 32]> for [u8] {
@@ -42,36 +42,39 @@ pub fn keccak256(in_ptr: *const u8, in_len: usize, out_ptr: *mut u8) {
     sha3.finalize(res);
 }
 
-#[no_mangle]
-pub fn ecpointg(g: *mut ECPointG) {
-    unsafe {
-        *g = ECPointG::new();
+static mut G: Option<ECPointG> = None;
+
+fn ecpointg() -> &'static ECPointG {
+    let g = unsafe { &G };
+
+    if g.is_none() {
+        unsafe { G = Some(ECPointG::new()) };
     }
+
+    g.as_ref().expect("value set above; qed")
 }
 
 #[no_mangle]
 pub fn verify_secret(secret: *const u8) -> bool {
-    // let secret = unsafe { slice::from_raw_parts(secret, 32) };
+    let secret = unsafe { slice::from_raw_parts(secret, 32) };
 
-    // is_valid_secret(secret)
-    true
+    is_valid_secret(secret)
 }
 
 #[no_mangle]
 pub fn brain(
-    g: *const ECPointG,
-    in_ptr: *const u8, in_len: usize,
+    in_ptr: *const u8,
+    in_len: usize,
     secret: *mut u8,
     public: *mut u8,
     address: *mut u8
 ) {
     let data = unsafe { slice::from_raw_parts(in_ptr, in_len) };
-    let g = unsafe { &*g };
-
     let mut secret_out = unsafe { slice::from_raw_parts_mut(secret, 32) };
     let mut public_out = unsafe { slice::from_raw_parts_mut(public, 64) };
     let mut address_out = unsafe { slice::from_raw_parts_mut(address, 20) };
 
+    let g = ecpointg();
     let mut secret = data.keccak256();
 
     let mut i = 0;

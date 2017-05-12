@@ -30,7 +30,7 @@ const STATIC_BASE = 1024;
 const STATICTOP = STATIC_BASE + WASM_PAGE_SIZE * 2;
 const STACK_BASE = align(STATICTOP + 16);
 const STACKTOP = STACK_BASE;
-const TOTAL_STACK = 30 * WASM_PAGE_SIZE; // 5242880;
+const TOTAL_STACK = 5 * 1024 * 1024; // 30 * WASM_PAGE_SIZE; // 5242880;
 const TOTAL_MEMORY = 16777216;
 const STACK_MAX = STACK_BASE + TOTAL_STACK;
 const DYNAMIC_BASE = STACK_MAX + WASM_PAGE_SIZE * 2;
@@ -126,12 +126,10 @@ function route ({ action, payload }) {
   return null;
 }
 
-// Don't use malloc, manually set pointers from 4MB range...
-const inputPtr = STACK_MAX;
-const secretPtr = inputPtr + 1024;
-const publicPtr = secretPtr + 32;
-const addressPtr = publicPtr + 64;
-const G = addressPtr + 32;
+const inputPtr = ethkey.exports._malloc(1024);
+const secretPtr = ethkey.exports._malloc(32);
+const publicPtr = ethkey.exports._malloc(64);
+const addressPtr = ethkey.exports._malloc(20);
 
 const inputBuf = wasmHeap.subarray(inputPtr, inputPtr + 1024);
 const secretBuf = wasmHeap.subarray(secretPtr, secretPtr + 32);
@@ -144,8 +142,7 @@ const actions = {
 
     inputBuf.set(phraseUtf8);
 
-    ethkey.exports._ecpointg(G);
-    ethkey.exports._brain(G, inputPtr, phraseUtf8.length, secretPtr, addressPtr);
+    ethkey.exports._brain(inputPtr, phraseUtf8.length, secretPtr, addressPtr);
 
     const wallet = {
       secret: bytesToHex(secretBuf),
