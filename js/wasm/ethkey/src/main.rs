@@ -47,10 +47,11 @@ static mut G: Option<ECPointG> = None;
 fn ecpointg() -> &'static ECPointG {
     let g = unsafe { &G };
 
-    if g.is_none() {
-        unsafe { G = Some(ECPointG::new()) };
+    if let Some(ref g) = *g {
+        return g;
     }
 
+    unsafe { G = Some(ECPointG::new()) };
     g.as_ref().expect("value set above; qed")
 }
 

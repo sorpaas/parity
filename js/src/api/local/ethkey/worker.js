@@ -14,93 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
-/* global WebAssembly */
-
 import { bytesToHex } from '~/api/util/format';
-import Ethkey from './ethkey.wasm';
-
-const NOOP = () => {};
-
-function align (mem) {
-  return (Math.ceil(mem / 16) * 16) | 0;
-}
-
-const WASM_PAGE_SIZE = 65536;
-const STATIC_BASE = 1024;
-const STATICTOP = STATIC_BASE + WASM_PAGE_SIZE * 2;
-const STACK_BASE = align(STATICTOP + 16);
-const STACKTOP = STACK_BASE;
-const TOTAL_STACK = 5 * 1024 * 1024; // 30 * WASM_PAGE_SIZE; // 5242880;
-const TOTAL_MEMORY = 16777216;
-const STACK_MAX = STACK_BASE + TOTAL_STACK;
-const DYNAMIC_BASE = STACK_MAX + WASM_PAGE_SIZE * 2;
-const DYNAMICTOP_PTR = STACK_MAX;
-
-console.log('static', STATIC_BASE, 'static_top', STATICTOP, 'stack_base', STACK_BASE, 'stack_max', STACK_MAX, 'total', TOTAL_MEMORY);
-
-const wasmMemory = new WebAssembly.Memory({
-  initial: TOTAL_MEMORY / WASM_PAGE_SIZE,
-  maximum: TOTAL_MEMORY / WASM_PAGE_SIZE
-});
-const wasmTable = new WebAssembly.Table({
-  initial: 8,
-  maximum: 8,
-  element: 'anyfunc'
-});
-
-const wasmHeap = new Uint8Array(wasmMemory.buffer);
-const wasmHeap32 = new Uint32Array(wasmMemory.buffer);
-
-wasmHeap32[DYNAMICTOP_PTR >> 2] = align(DYNAMIC_BASE);
-
-function abort (what) {
-  throw new Error(what || 'WASM abort');
-}
-
-function abortOnCannotGrowMemory () {
-  abort(`Cannot enlarge memory arrays.`);
-}
-
-function enlargeMemory () {
-  abortOnCannotGrowMemory();
-}
-
-function getTotalMemory () {
-  return TOTAL_MEMORY;
-}
-
-function memcpy (dest, src, len) {
-  wasmHeap.set(wasmHeap.subarray(src, src + len), dest);
-
-  return dest;
-}
-
-const ethkey = new Ethkey({
-  global: {},
-  env: {
-    DYNAMICTOP_PTR,
-    STACKTOP,
-    STACK_MAX,
-    abort,
-    enlargeMemory,
-    getTotalMemory,
-    abortOnCannotGrowMemory,
-    ___lock: NOOP,
-    ___syscall6: () => 0,
-    ___setErrNo: (no) => no,
-    _abort: abort,
-    ___syscall140: () => 0,
-    _emscripten_memcpy_big: memcpy,
-    ___syscall54: () => 0,
-    ___unlock: () => console.log('unlock'),
-    _llvm_trap: () => abort.bind(null, 'abort: llvm trap'),
-    ___syscall146: () => 0,
-    'memory': wasmMemory,
-    'table': wasmTable,
-    tableBase: 0,
-    memoryBase: STATIC_BASE
-  }
-});
+import { ethkey, allocate, ptr } from './ethkey.js';
 
 const isWorker = typeof self !== 'undefined';
 
@@ -126,28 +41,24 @@ function route ({ action, payload }) {
   return null;
 }
 
-const inputPtr = ethkey.exports._malloc(1024);
-const secretPtr = ethkey.exports._malloc(32);
-const publicPtr = ethkey.exports._malloc(64);
-const addressPtr = ethkey.exports._malloc(20);
-
-const inputBuf = wasmHeap.subarray(inputPtr, inputPtr + 1024);
-const secretBuf = wasmHeap.subarray(secretPtr, secretPtr + 32);
-const publicBuf = wasmHeap.subarray(publicPtr, publicPtr + 64);
-const addressBuf = wasmHeap.subarray(addressPtr, addressPtr + 20);
+// Pre-allocate buffers used to communicate with the WASM module.
+const input = allocate(1024);
+const secret = allocate(32);
+const publicKey = allocate(64);
+const address = allocate(20);
 
 const actions = {
   phraseToWallet (phrase) {
     const phraseUtf8 = Buffer.from(phrase, 'utf8');
 
-    inputBuf.set(phraseUtf8);
+    input.set(phraseUtf8);
 
-    ethkey.exports._brain(inputPtr, phraseUtf8.length, secretPtr, addressPtr);
+    ethkey.exports._brain(ptr(input), phraseUtf8.length, ptr(secret), ptr(address));
 
     const wallet = {
-      secret: bytesToHex(secretBuf),
-      public: bytesToHex(publicBuf),
-      address: bytesToHex(addressBuf)
+      secret: bytesToHex(secret),
+      public: bytesToHex(publicKey),
+      address: bytesToHex(address)
     };
 
     return wallet;
@@ -156,9 +67,9 @@ const actions = {
   verifySecret (secret) {
     const key = Buffer.from(secret.slice(2), 'hex');
 
-    wasmHeap.set(key, secretPtr);
+    secret.set(key);
 
-    return ethkey.exports._verify_secret(secretPtr);
+    return ethkey.exports._verify_secret(ptr(secret));
   },
 
   createKeyObject ({ key, password }) {
