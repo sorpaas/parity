@@ -15,7 +15,7 @@
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
 import { bytesToHex } from '~/api/util/format';
-import { ethkey, allocate, ptr } from './ethkey.js';
+import { funcs, slice, ptr } from './ethkey.js';
 
 const isWorker = typeof self !== 'undefined';
 
@@ -41,11 +41,10 @@ function route ({ action, payload }) {
   return null;
 }
 
-// Pre-allocate buffers used to communicate with the WASM module.
-const input = allocate(1024);
-const secret = allocate(32);
-const publicKey = allocate(64);
-const address = allocate(20);
+const input = slice(funcs._input_ptr(), 1024);
+const secret = slice(funcs._secret_ptr(), 32);
+const publicKey = slice(funcs._public_ptr(), 64);
+const address = slice(funcs._address_ptr(), 20);
 
 const actions = {
   phraseToWallet (phrase) {
@@ -53,7 +52,7 @@ const actions = {
 
     input.set(phraseUtf8);
 
-    ethkey.exports._brain(ptr(input), phraseUtf8.length, ptr(secret), ptr(address));
+    funcs._brain(phraseUtf8.length);
 
     const wallet = {
       secret: bytesToHex(secret),
@@ -69,7 +68,7 @@ const actions = {
 
     secret.set(key);
 
-    return ethkey.exports._verify_secret(ptr(secret));
+    return funcs._verify_secret(ptr(secret));
   },
 
   createKeyObject ({ key, password }) {

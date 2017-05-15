@@ -51,17 +51,13 @@ const wasmMemoryU32 = new Uint32Array(wasmMemory.buffer);
 wasmMemoryU32[DYNAMICTOP_PTR >> 2] = align(DYNAMIC_BASE);
 
 function align (mem) {
-  return (Math.ceil(mem / 16) * 16) | 0;
+  const ALIGN_SIZE = 16;
+
+  return (Math.ceil(mem / ALIGN_SIZE) * ALIGN_SIZE) | 0;
 }
 
-// Allocate an amount of bytes on the heap.
-// Returns Uint8Array view into the allocated memory.
-export function allocate (size) {
-  let ptr = wasmMemoryU32[DYNAMICTOP_PTR >> 2];
-
-  wasmMemoryU32[DYNAMICTOP_PTR >> 2] += align(size);
-
-  return wasmMemoryU8.subarray(ptr, ptr + size);
+export function slice (ptr, len) {
+  return wasmMemoryU8.subarray(ptr, ptr + len);
 }
 
 // Mostly naming convenience - TypedArray#byteOffset == WASM pointer
@@ -97,7 +93,7 @@ function memcpy (dest, src, len) {
 }
 
 // Instantiated WASM module
-export const ethkey = new Ethkey({
+const ethkey = new Ethkey({
   global: {},
   env: {
     DYNAMICTOP_PTR,
@@ -123,3 +119,5 @@ export const ethkey = new Ethkey({
     memoryBase: STATIC_BASE
   }
 });
+
+export const funcs = ethkey.exports;

@@ -11,7 +11,7 @@ extern crate tiny_secp256k1;
 
 use tiny_secp256k1::{is_valid_secret, create_public_key, ECPointG};
 
-#[link_args = "-s EXPORTED_FUNCTIONS=['_verify_secret','_keccak256','_brain']"]
+#[link_args = "-s EXPORTED_FUNCTIONS=['_input_ptr','_secret_ptr','_public_ptr','_address_ptr','_verify_secret','_keccak256','_brain']"]
 extern {}
 
 use tiny_keccak::Keccak;
@@ -42,6 +42,10 @@ pub fn keccak256(in_ptr: *const u8, in_len: usize, out_ptr: *mut u8) {
     sha3.finalize(res);
 }
 
+static mut INPUT: [u8; 1024] = [0; 1024];
+static mut SECRET: [u8; 32] = [0; 32];
+static mut PUBLIC: [u8; 64] = [0; 64];
+static mut ADDRESS: [u8; 20] = [0; 20];
 static mut G: Option<ECPointG> = None;
 
 fn ecpointg() -> &'static ECPointG {
@@ -56,6 +60,26 @@ fn ecpointg() -> &'static ECPointG {
 }
 
 #[no_mangle]
+pub fn input_ptr() -> *const u8 {
+    unsafe { INPUT.as_ptr() }
+}
+
+#[no_mangle]
+pub fn secret_ptr() -> *const u8 {
+    unsafe { SECRET.as_ptr() }
+}
+
+#[no_mangle]
+pub fn public_ptr() -> *const u8 {
+    unsafe { PUBLIC.as_ptr() }
+}
+
+#[no_mangle]
+pub fn address_ptr() -> *const u8 {
+    unsafe { ADDRESS.as_ptr() }
+}
+
+#[no_mangle]
 pub fn verify_secret(secret: *const u8) -> bool {
     let secret = unsafe { slice::from_raw_parts(secret, 32) };
 
@@ -63,17 +87,11 @@ pub fn verify_secret(secret: *const u8) -> bool {
 }
 
 #[no_mangle]
-pub fn brain(
-    in_ptr: *const u8,
-    in_len: usize,
-    secret: *mut u8,
-    public: *mut u8,
-    address: *mut u8
-) {
-    let data = unsafe { slice::from_raw_parts(in_ptr, in_len) };
-    let mut secret_out = unsafe { slice::from_raw_parts_mut(secret, 32) };
-    let mut public_out = unsafe { slice::from_raw_parts_mut(public, 64) };
-    let mut address_out = unsafe { slice::from_raw_parts_mut(address, 20) };
+pub fn brain(input_len: usize) {
+    let data = unsafe { &INPUT[..input_len] };
+    let mut secret_out = unsafe { &mut SECRET };
+    let mut public_out = unsafe { &mut PUBLIC };
+    let mut address_out = unsafe { &mut ADDRESS };
 
     let g = ecpointg();
     let mut secret = data.keccak256();
