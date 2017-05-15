@@ -60,11 +60,6 @@ export function slice (ptr, len) {
   return wasmMemoryU8.subarray(ptr, ptr + len);
 }
 
-// Mostly naming convenience - TypedArray#byteOffset == WASM pointer
-export function ptr (typedArray) {
-  return typedArray.byteOffset;
-}
-
 // Required by emscripten
 function abort (what) {
   throw new Error(what || 'WASM abort');
@@ -120,4 +115,4 @@ const ethkey = new Ethkey({
   }
 });
 
-export const funcs = ethkey.exports;
+export const extern = ethkey.exports;

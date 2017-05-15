@@ -2,7 +2,7 @@
 #![feature(start)]
 #![feature(link_args)]
 #![no_std]
-use core::{intrinsics, slice};
+use core::intrinsics;
 
 // Pull in the system libc library for what crt0.o likely requires.
 extern crate libc;
@@ -11,7 +11,7 @@ extern crate tiny_secp256k1;
 
 use tiny_secp256k1::{is_valid_secret, create_public_key, ECPointG};
 
-#[link_args = "-s EXPORTED_FUNCTIONS=['_input_ptr','_secret_ptr','_public_ptr','_address_ptr','_verify_secret','_keccak256','_brain']"]
+#[link_args = "-s EXPORTED_FUNCTIONS=['_input_ptr','_secret_ptr','_public_ptr','_address_ptr','_ecpointg','_verify_secret','_brain']"]
 extern {}
 
 use tiny_keccak::Keccak;
@@ -31,24 +31,14 @@ impl Keccak256<[u8; 32]> for [u8] {
     }
 }
 
-#[no_mangle]
-pub fn keccak256(in_ptr: *const u8, in_len: usize, out_ptr: *mut u8) {
-    let data = unsafe { slice::from_raw_parts(in_ptr, in_len) };
-
-    let mut res = unsafe { slice::from_raw_parts_mut(out_ptr, 32) };
-    let mut sha3 = Keccak::new_keccak256();
-
-    sha3.update(data);
-    sha3.finalize(res);
-}
-
 static mut INPUT: [u8; 1024] = [0; 1024];
 static mut SECRET: [u8; 32] = [0; 32];
 static mut PUBLIC: [u8; 64] = [0; 64];
 static mut ADDRESS: [u8; 20] = [0; 20];
 static mut G: Option<ECPointG> = None;
 
-fn ecpointg() -> &'static ECPointG {
+#[no_mangle]
+pub fn ecpointg() -> &'static ECPointG {
     let g = unsafe { &G };
 
     if let Some(ref g) = *g {
@@ -80,10 +70,8 @@ pub fn address_ptr() -> *const u8 {
 }
 
 #[no_mangle]
-pub fn verify_secret(secret: *const u8) -> bool {
-    let secret = unsafe { slice::from_raw_parts(secret, 32) };
-
-    is_valid_secret(secret)
+pub fn verify_secret() -> bool {
+    is_valid_secret(unsafe { &SECRET })
 }
 
 #[no_mangle]

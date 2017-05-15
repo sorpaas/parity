@@ -15,7 +15,7 @@
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
 import { bytesToHex } from '~/api/util/format';
-import { funcs, slice, ptr } from './ethkey.js';
+import { extern, slice } from './ethkey.js';
 
 const isWorker = typeof self !== 'undefined';
 
@@ -41,18 +41,24 @@ function route ({ action, payload }) {
   return null;
 }
 
-const input = slice(funcs._input_ptr(), 1024);
-const secret = slice(funcs._secret_ptr(), 32);
-const publicKey = slice(funcs._public_ptr(), 64);
-const address = slice(funcs._address_ptr(), 20);
+const input = slice(extern._input_ptr(), 1024);
+const secret = slice(extern._secret_ptr(), 32);
+const publicKey = slice(extern._public_ptr(), 64);
+const address = slice(extern._address_ptr(), 20);
+
+extern._ecpointg();
 
 const actions = {
   phraseToWallet (phrase) {
     const phraseUtf8 = Buffer.from(phrase, 'utf8');
 
+    if (phraseUtf8.length > input.length) {
+      throw new Error('Phrase is too long!');
+    }
+
     input.set(phraseUtf8);
 
-    funcs._brain(phraseUtf8.length);
+    extern._brain(phraseUtf8.length);
 
     const wallet = {
       secret: bytesToHex(secret),
@@ -68,7 +74,7 @@ const actions = {
 
     secret.set(key);
 
-    return funcs._verify_secret(ptr(secret));
+    return extern._verify_secret();
   },
 
   createKeyObject ({ key, password }) {
