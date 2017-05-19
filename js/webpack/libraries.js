@@ -42,7 +42,6 @@ module.exports = {
   resolve: {
     alias: {
       '~': path.resolve(__dirname, '../src'),
-      'secp256k1': path.resolve(__dirname, '../node_modules/secp256k1/js'),
       'keythereum': path.resolve(__dirname, '../node_modules/keythereum/dist/keythereum')
     }
   },
@@ -66,10 +65,6 @@ module.exports = {
       {
         test: /\.json$/,
         use: [ 'json-loader' ]
-      },
-      {
-        test: /\.wasm$/,
-        use: [ 'wasm-loader' ]
       },
       {
         test: /\.html$/,

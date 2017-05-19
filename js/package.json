@@ -149,7 +149,6 @@
     "stylelint-config-standard": "16.0.0",
     "to-source": "2.0.3",
     "url-loader": "0.5.7",
-    "wasm-loader": "0.0.3",
     "webpack": "2.2.1",
     "webpack-bundle-size-analyzer": "2.5.0",
     "webpack-dev-middleware": "1.10.1",

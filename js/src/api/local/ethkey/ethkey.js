@@ -16,7 +16,7 @@
 
 /* global WebAssembly */
 
-import Ethkey from './ethkey.opt.wasm';
+import wasmBuffer from './ethkey.wasm.js';
 
 const NOOP = () => {};
 
@@ -32,12 +32,38 @@ const STACK_MAX = STACK_BASE + TOTAL_STACK;
 const DYNAMIC_BASE = STACK_MAX + 64;
 const DYNAMICTOP_PTR = STACK_MAX;
 
-const wasmMemory = new WebAssembly.Memory({
+function mockWebAssembly () {
+  function throwWasmError () {
+    throw new Error('Missing WebAssembly support');
+  }
+
+  // Simple mock replacement
+  return {
+    Memory: class { buffer = new ArrayBuffer(2048) },
+    Table: class {},
+    Module: class {},
+    Instance: class {
+      exports = {
+        '_input_ptr': () => 0,
+        '_secret_ptr': () => 0,
+        '_public_ptr': () => 0,
+        '_address_ptr': () => 0,
+        '_ecpointg': NOOP,
+        '_brain': throwWasmError,
+        '_verify_secret': throwWasmError
+      }
+    }
+  };
+}
+
+const { Memory, Table, Module, Instance } = typeof WebAssembly !== 'undefined' ? WebAssembly : mockWebAssembly();
+
+const wasmMemory = new Memory({
   initial: TOTAL_MEMORY / WASM_PAGE_SIZE,
   maximum: TOTAL_MEMORY / WASM_PAGE_SIZE
 });
 
-const wasmTable = new WebAssembly.Table({
+const wasmTable = new Table({
   initial: 8,
   maximum: 8,
   element: 'anyfunc'
@@ -87,8 +113,11 @@ function memcpy (dest, src, len) {
   return dest;
 }
 
+// Synchronously compile WASM from the buffer
+const module = new Module(wasmBuffer);
+
 // Instantiated WASM module
-const ethkey = new Ethkey({
+const instance = new Instance(module, {
   global: {},
   env: {
     DYNAMICTOP_PTR,
@@ -115,4 +144,4 @@ const ethkey = new Ethkey({
   }
 });
 
-export const extern = ethkey.exports;
+export const extern = instance.exports;
