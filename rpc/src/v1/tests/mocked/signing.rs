@@ -28,7 +28,7 @@ use v1::types::ConfirmationResponse;
 use v1::tests::helpers::TestMinerService;
 use v1::tests::mocked::parity;
 
-use util::{Address, Uint, U256, ToPretty};
+use util::{Address, U256, ToPretty};
 use ethkey::Secret;
 use ethcore::account_provider::AccountProvider;
 use ethcore::client::TestBlockChainClient;
@@ -47,7 +47,7 @@ struct SigningTester {
 
 impl Default for SigningTester {
 	fn default() -> Self {
-		let signer = Arc::new(SignerService::new_test(None));
+		let signer = Arc::new(SignerService::new_test(false));
 		let client = Arc::new(TestBlockChainClient::default());
 		let miner = Arc::new(TestMinerService::default());
 		let accounts = Arc::new(AccountProvider::transient_provider());
@@ -200,7 +200,7 @@ fn should_sign_if_account_is_unlocked() {
 	// given
 	let tester = eth_signing();
 	let data = vec![5u8];
-	let acc = tester.accounts.insert_account(Secret::from_slice(&[69u8; 32]).unwrap(), "test").unwrap();
+	let acc = tester.accounts.insert_account(Secret::from_slice(&[69u8; 32]), "test").unwrap();
 	tester.accounts.unlock_account_permanently(acc, "test".into()).unwrap();
 
 	// when
@@ -213,7 +213,7 @@ fn should_sign_if_account_is_unlocked() {
 		],
 		"id": 1
 	}"#;
-	let response = r#"{"jsonrpc":"2.0","result":"0x1bdb53b32e56cf3e9735377b7664d6de5a03e125b1bf8ec55715d253668b4238503b4ac931fe6af90add73e72a585e952665376b2b9afc5b6b239b7df74c734e12","id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":"0xdb53b32e56cf3e9735377b7664d6de5a03e125b1bf8ec55715d253668b4238503b4ac931fe6af90add73e72a585e952665376b2b9afc5b6b239b7df74c734e121b","id":1}"#;
 	assert_eq!(tester.io.handle_request_sync(&request), Some(response.to_owned()));
 	assert_eq!(tester.signer.requests().len(), 0);
 }
@@ -420,7 +420,6 @@ fn should_add_decryption_to_the_queue() {
 	}"#;
 	let response = r#"{"jsonrpc":"2.0","result":"0x0102","id":1}"#;
 
-
 	// then
 	let promise = tester.io.handle_request(&request);
 
@@ -432,7 +431,7 @@ fn should_add_decryption_to_the_queue() {
 			signer.request_confirmed(1.into(), Ok(ConfirmationResponse::Decrypt(vec![0x1, 0x2].into())));
 			break
 		}
-		::std::thread::sleep(Duration::from_millis(100))
+		::std::thread::sleep(Duration::from_millis(10))
 	});
 
 	// check response: will deadlock if unsuccessful.
