@@ -836,7 +836,7 @@ impl Configuration {
 			hosts: self.ws_hosts(),
 			origins: self.ws_origins(),
 			signer_path: self.directories().signer.into(),
-			require_token: !self.args.flag_public_node,
+			support_token_api: !self.args.flag_public_node,
 			ui_address: ui.address(),
 		};
 

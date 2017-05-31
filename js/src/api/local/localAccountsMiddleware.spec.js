@@ -32,7 +32,7 @@ class MockedTransport extends JsonRpcBase {
   }
 }
 
-describe.only('api/local/LocalAccountsMiddleware', function () {
+describe('api/local/LocalAccountsMiddleware', function () {
   this.timeout(30000);
 
   let transport;
