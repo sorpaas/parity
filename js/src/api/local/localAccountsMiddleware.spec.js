@@ -32,8 +32,7 @@ class MockedTransport extends JsonRpcBase {
   }
 }
 
-// TODO: Skipping until Node.js 8.0 comes out and we can test WebAssembly
-describe.skip('api/local/LocalAccountsMiddleware', function () {
+describe.only('api/local/LocalAccountsMiddleware', function () {
   this.timeout(30000);
 
   let transport;

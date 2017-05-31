@@ -69,10 +69,10 @@ const actions = {
     return wallet;
   },
 
-  verifySecret (secret) {
-    const key = Buffer.from(secret.slice(2), 'hex');
+  verifySecret (key) {
+    const keyBuf = Buffer.from(key.slice(2), 'hex');
 
-    secret.set(key);
+    secret.set(keyBuf);
 
     return extern._verify_secret();
   },

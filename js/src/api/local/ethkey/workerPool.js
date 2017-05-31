@@ -64,7 +64,7 @@ class WorkerPool {
 
     let promise;
 
-    const start = Date.now();
+    // const start = Date.now();
 
     if (container) {
       promise = container.action(action, payload);
@@ -83,7 +83,7 @@ class WorkerPool {
       .then((result) => {
         this.processQueue();
 
-        console.log('Work done in ', Date.now() - start);
+        // console.log('Work done in ', Date.now() - start);
 
         return result;
       });
