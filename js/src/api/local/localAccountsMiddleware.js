@@ -149,6 +149,11 @@ export default class LocalAccountsMiddleware extends Middleware {
       return [];
     });
 
+    register('parity_wsUrl', () => {
+      // This is a hack
+      return `${window.location.hostname}:8546`;
+    });
+
     register('parity_killAccount', ([address, password]) => {
       return accounts.remove(address, password);
     });

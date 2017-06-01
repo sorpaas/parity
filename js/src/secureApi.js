@@ -51,6 +51,7 @@ export default class SecureApi extends Api {
 
   constructor (uiUrl, nextToken, getTransport = SecureApi.getTransport, protocol = SecureApi.protocol) {
     const sysuiToken = store.get('sysuiToken');
+
     const transport = getTransport(uiUrl, sysuiToken, protocol);
 
     super(transport);
