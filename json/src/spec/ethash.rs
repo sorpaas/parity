@@ -100,6 +100,10 @@ pub struct EthashParams {
 	#[serde(rename="ecip1010ContinueTransition")]
 	pub ecip1010_continue_transition: Option<Uint>,
 
+    /// See main EthashParams docs.
+    #[serde(rename="ecip1017EraRounds")]
+    pub ecip1017_era_rounds: Option<Uint>,
+
 	/// See main EthashParams docs.
 	#[serde(rename="maxCodeSize")]
 	pub max_code_size: Option<Uint>,
