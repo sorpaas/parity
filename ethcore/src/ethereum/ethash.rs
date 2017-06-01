@@ -300,7 +300,7 @@ impl Engine for Arc<Ethash> {
 			} else {
 				fields.state.add_balance(
 					u.author(),
-					&(reward * / U256::from(32)),
+					&(reward / U256::from(32)),
 					CleanupMode::NoEmpty
 				)
 			}?;
