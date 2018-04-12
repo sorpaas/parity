@@ -16,7 +16,12 @@
 
 //! Database-related operations.
 
+#[cfg(not(feature = "paritydb"))]
 #[path="rocksdb/mod.rs"]
+mod impls;
+
+#[cfg(feature = "paritydb")]
+#[path="paritydb.rs"]
 mod impls;
 
 pub use self::impls::{open_db, open_client_db, restoration_db_handler, migrate};
