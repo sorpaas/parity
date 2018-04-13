@@ -23,6 +23,8 @@ use db::Key;
 use engines::epoch::{Transition as EpochTransition};
 use header::BlockNumber;
 use receipt::Receipt;
+use bytes::Bytes;
+use rlp;
 
 use heapsize::HeapSizeOf;
 use ethereum_types::{H256, H264, U256};
@@ -167,7 +169,7 @@ impl Key<EpochTransitions> for u64 {
 }
 
 /// Familial details concerning a block
-#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
+#[derive(Debug, Clone)]
 pub struct BlockDetails {
 	/// Block number
 	pub number: BlockNumber,
@@ -177,6 +179,52 @@ pub struct BlockDetails {
 	pub parent: H256,
 	/// List of children block hashes
 	pub children: Vec<H256>,
+	/// Metadata information
+	pub metadatas: Vec<BlockMetadata>,
+}
+
+impl rlp::Encodable for BlockDetails {
+	fn rlp_append(&self, stream: &mut rlp::RlpStream) {
+		if self.metadatas.len() == 0 {
+			stream.begin_list(4);
+		} else {
+			stream.begin_list(5);
+		}
+		stream.append(&self.number);
+		stream.append(&self.total_difficulty);
+		stream.append(&self.parent);
+		stream.append_list(&self.children);
+		if self.metadatas.len() != 0 {
+			stream.append_list(&self.metadatas);
+		}
+	}
+}
+
+impl rlp::Decodable for BlockDetails {
+	fn decode(rlp: &rlp::UntrustedRlp) -> Result<Self, rlp::DecoderError> {
+		let metadatas = if rlp.item_count()? == 5 {
+			rlp.list_at(4)?
+		} else {
+			Vec::new()
+		};
+
+		Ok(BlockDetails {
+			number: rlp.val_at(0)?,
+			total_difficulty: rlp.val_at(1)?,
+			parent: rlp.val_at(2)?,
+			children: rlp.list_at(3)?,
+			metadatas: metadatas,
+		})
+	}
+}
+
+/// Metadata key and value
+#[derive(Debug, Clone, RlpEncodable, RlpDecodable)]
+pub struct BlockMetadata {
+	/// Key of the metadata
+	pub key: Bytes,
+	/// Value of the metadata
+	pub value: Bytes,
 }
 
 impl HeapSizeOf for BlockDetails {
