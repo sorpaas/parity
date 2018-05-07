@@ -53,6 +53,7 @@ allow_ips = "all"
 snapshot_peers = 0
 max_pending_peers = 64
 no_serve_light = false
+no_ancient_blocks = false
 
 reserved_only = false
 reserved_peers = "./path_to_file"

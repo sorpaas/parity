@@ -422,7 +422,7 @@ usage! {
 			"--reserved-only",
 			"Connect only to reserved nodes.",
 
-			FLAG flag_no_ancient_blocks: (bool) = false, or |_| None,
+			FLAG flag_no_ancient_blocks: (bool) = false, or |c: &Config| c.network.as_ref()?.no_ancient_blocks.clone(),
 			"--no-ancient-blocks",
 			"Disable downloading old blocks after snapshot restoration or warp sync.",
 
@@ -1132,6 +1132,7 @@ struct Network {
 	reserved_peers: Option<String>,
 	reserved_only: Option<bool>,
 	no_serve_light: Option<bool>,
+	no_ancient_blocks: Option<bool>,
 }
 
 #[derive(Default, Debug, PartialEq, Deserialize)]
@@ -1836,6 +1837,7 @@ mod tests {
 				reserved_peers: Some("./path/to/reserved_peers".into()),
 				reserved_only: Some(true),
 				no_serve_light: None,
+				no_ancient_blocks: None,
 			}),
 			websockets: Some(Ws {
 				disable: Some(true),
