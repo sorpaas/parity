@@ -235,15 +235,11 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 		self.transact(t, options)
 	}
 
-	/// Execute transaction/call with tracing enabled
-	fn transact_with_tracer<T, V>(
-		&'a mut self,
+	fn transact_action_params(
+		&self,
 		t: &SignedTransaction,
 		check_nonce: bool,
-		output_from_create: bool,
-		mut tracer: T,
-		mut vm_tracer: V
-	) -> Result<Executed<T::Output, V::Output>, ExecutionError> where T: Tracer, V: VMTracer {
+	) -> Result<(ActionParams, U512), ExecutionError> {
 		let sender = t.sender();
 		let nonce = self.state.nonce(&sender)?;
 
@@ -285,18 +281,10 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 			return Err(ExecutionError::NotEnoughCash { required: total_cost, got: balance512 });
 		}
 
-		let mut substate = Substate::new();
-
-		// NOTE: there can be no invalid transactions from this point.
-		if !schedule.eip86 || !t.is_unsigned() {
-			self.state.inc_nonce(&sender)?;
-		}
-		self.state.sub_balance(&sender, &U256::from(gas_cost), &mut substate.to_cleanup_mode(&schedule))?;
-
-		let (result, output) = match t.action {
+		Ok((match t.action {
 			Action::Create => {
 				let (new_address, code_hash) = contract_address(self.machine.create_address_scheme(self.info.number), &sender, &nonce, &t.data);
-				let params = ActionParams {
+				ActionParams {
 					code_address: new_address.clone(),
 					code_hash: code_hash,
 					address: new_address,
@@ -309,12 +297,10 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 					data: None,
 					call_type: CallType::None,
 					params_type: vm::ParamsType::Embedded,
-				};
-				let mut out = if output_from_create { Some(vec![]) } else { None };
-				(self.create(params, &mut substate, &mut out, &mut tracer, &mut vm_tracer), out.unwrap_or_else(Vec::new))
+				}
 			},
 			Action::Call(ref address) => {
-				let params = ActionParams {
+				ActionParams {
 					code_address: address.clone(),
 					address: address.clone(),
 					sender: sender.clone(),
@@ -327,7 +313,36 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 					data: Some(t.data.clone()),
 					call_type: CallType::Call,
 					params_type: vm::ParamsType::Separate,
-				};
+				}
+			},
+		}, gas_cost))
+	}
+
+	/// Execute transaction/call with tracing enabled
+	fn transact_with_tracer<T, V>(
+		&'a mut self,
+		t: &SignedTransaction,
+		check_nonce: bool,
+		output_from_create: bool,
+		mut tracer: T,
+		mut vm_tracer: V
+	) -> Result<Executed<T::Output, V::Output>, ExecutionError> where T: Tracer, V: VMTracer {
+		let (params, gas_cost) = self.transact_action_params(t, check_nonce)?;
+
+		// NOTE: there can be no invalid transactions from this point.
+		let schedule = self.schedule;
+		let mut substate = Substate::new();
+		if !schedule.eip86 || !t.is_unsigned() {
+			self.state.inc_nonce(&params.sender)?;
+		}
+		self.state.sub_balance(&params.sender, &U256::from(gas_cost), &mut substate.to_cleanup_mode(&schedule))?;
+
+		let (result, output) = match t.action {
+			Action::Create => {
+				let mut out = if output_from_create { Some(vec![]) } else { None };
+				(self.create(params, &mut substate, &mut out, &mut tracer, &mut vm_tracer), out.unwrap_or_else(Vec::new))
+			},
+			Action::Call(_) => {
 				let mut out = vec![];
 				(self.call(params, &mut substate, BytesRef::Flexible(&mut out), &mut tracer, &mut vm_tracer), out)
 			}
