@@ -162,6 +162,314 @@ impl TransactOptions<trace::NoopTracer, trace::NoopVMTracer> {
 	}
 }
 
+pub enum ActionKind {
+	Call, Create
+}
+
+pub enum ResumeValue {
+	Call(MessageCallResult),
+	Create(ContractCreateResult),
+}
+
+enum CallCreateExecutiveKind {
+	Transfer(ActionParams),
+	CallBuiltin(ActionParams, Builtin),
+	CallVm(ActionParams, Box<Vm>, Substate),
+	CreateVm(ActionParams, Box<Vm>, Substate),
+}
+
+/// Call/Create executor.
+pub struct CallCreateExecutive<'a, B: 'a> {
+	info: &'a EnvInfo,
+	machine: &'a Machine,
+	schedule: &'a Schedule,
+	factory: &'a VmFactory,
+	depth: usize,
+	static_flag: bool,
+	kind: CallCreateExecutiveKind,
+}
+
+impl<'a> CallCreateExecutive<'a> {
+	pub fn new_call_raw(params: ActionParams, info: &'a EnvInfo, machine: &'a Machine, schedule: &'a Schedule, factory: &'a VmFactory, depth: usize, static_flag: bool) -> Self {
+		trace!("Executive::call(params={:?}) self.env_info={:?}, static={}", params, info, static_flag);
+
+		let kind = if let Some(builtin) = self.machine.builtin(&params.code_address, info.number) {
+			// Engines aren't supposed to return builtins until activation, but
+			// prefer to fail rather than silently break consensus.
+			if !builtin.is_active(self.info.number) {
+				panic!("Consensus failure: engine implementation prematurely enabled built-in at {}", params.code_address);
+			}
+
+			CallCreateExecutiveKind::CallBuiltin(params, builtin)
+		} else {
+			if params.code.is_some() {
+				CallCreateExecutiveKind::CallVm(params.clone(), factory.create(params, depth, schedule), Substate::new())
+			} else {
+				CallCreateExecutiveKind::Transfer(params)
+			}
+		};
+
+		Self {
+			info, machine, schedule, depth, static_flag, kind, factory
+		}
+	}
+
+	pub fn new_create_raw(params: ActionParams, info: &'a EnvInfo, machine: &'a Machine, schedule: &'a Schedule, factory: &'a VmFactory, depth: usize, static_flag: bool) -> Self {
+		trace!("Executive::create(params={:?}) self.env_info={:?}, static={}", params, info, static_flag);
+
+		let kind = CallCreateExecutiveKind::CreateVm(params.clone(), factory.create(params, depth, schedule), Substate::new());
+
+		Self {
+			info, machine, schedule, depth, static_flag, kind, factory
+		}
+	}
+
+	pub fn start<B: 'a + StateBackend>(
+		&mut self,
+		state: &mut State<B>,
+		substate: &mut Substate,
+	) -> vm::ResumableResult<FinalizationResult> {
+		match &mut self.kind {
+			&mut CallCreateExecutiveKind::Transfer(ref params) => {
+				if (self.params().call_type == CallType::StaticCall ||
+					((self.params().call_type == CallType::Call) &&
+					 static_flag))
+					&& self.params().value.value() > 0.into()
+				{
+					return Err(vm::Error::MutableCallInStaticContext);
+				}
+
+				if let ActionValue::Transfer(val) = params.value {
+					state.transfer_balance(&params.sender, &params.address, &val, substate.to_cleanup_mode(&schedule))?;
+				}
+
+				Ok(FinalizationResult {
+					params.gas,
+					return_data: ReturnData::empty(),
+					apply_state: true,
+				})
+			},
+
+			&mut CallCreateExecutiveKind::Builtin(ref params, ref builtin) => {
+				if (self.params().call_type == CallType::StaticCall ||
+					((self.params().call_type == CallType::Call) &&
+					 static_flag))
+					&& self.params().value.value() > 0.into()
+				{
+					return Err(vm::Error::MutableCallInStaticContext);
+				}
+
+				state.checkpoint();
+
+				if let ActionValue::Transfer(val) = params.value {
+					state.transfer_balance(&params.sender, &params.address, &val, substate.to_cleanup_mode(&schedule))?;
+				}
+
+				let default = [];
+				let data = if let Some(ref d) = params.data { d as &[u8] } else { &default as &[u8] };
+
+				let cost = builtin.cost(data);
+				if cost <= params.gas {
+					let mut builtin_out_buffer = Vec::new();
+					let result = {
+						let mut builtin_output = BytesRef::Flexible(&mut builtin_out_buffer);
+						builtin.execute(data, &mut builtin_output)
+					};
+					if let Err(e) = result {
+						self.state.revert_to_checkpoint();
+						let evm_err: vm::Error = e.into();
+						Err(evm_err)
+					} else {
+						self.state.discard_checkpoint();
+						output.write(0, &builtin_out_buffer);
+						let out_len = builtin_out_buffer.len();
+						Ok(FinalizationResult {
+							gas_left: params.gas - cost,
+							return_data: ReturnData::new(builtin_out_buffer, 0, out_len),
+							apply_state: true,
+						})
+					}
+				} else {
+					// just drain the whole gas
+					self.state.revert_to_checkpoint();
+					Err(vm::Error::OutOfGas)
+				}
+			},
+
+			&mut CallCreateExecutiveKind::CallVm(ref params, ref mut vm, ref mut unconfirmed_substate) => {
+				if (self.params().call_type == CallType::StaticCall ||
+					((self.params().call_type == CallType::Call) &&
+					 static_flag))
+					&& self.params().value.value() > 0.into()
+				{
+					return Err(vm::Error::MutableCallInStaticContext);
+				}
+
+				state.checkpoint();
+
+				if let ActionValue::Transfer(val) = params.value {
+					state.transfer_balance(&params.sender, &params.address, &val, substate.to_cleanup_mode(&schedule))?;
+				}
+
+				let gas = params.gas;
+
+				let mut subvmtracer = vm_tracer.prepare_subtrace(params.code.as_ref().expect("scope is conditional on params.code.is_some(); qed"));
+				let static_call = params.call_type == CallType::StaticCall;
+
+				let mut ext = self.as_externalities(OriginInfo::from(params), unconfirmed_substate, OutputPolicy::Return(output), static_call);
+
+				let res = match vm.start(&mut ext) {
+					Ok(val) => Ok(val),
+					Err(ResumableError::Trap) => return Err(ResumableError::Trap),
+					Err(ResumableError::Normal(err)) => Err(err),
+				};
+
+				enact_result(&res, state, substate, unconfirmed_substate)
+			},
+
+			&mut CallCreateExecutiveKind::CreateVm(ref params, ref mut vm, ref mut unconfirmed_substate) => {
+				if params.call_type == CallType::StaticCall || static_flag {
+					return Err(vm::Error::MutableCallInStaticContext);
+				}
+
+				// EIP-684: If a contract creation is attempted, due to either a creation transaction or the
+				// CREATE (or future CREATE2) opcode, and the destination address already has either
+				// nonzero nonce, or nonempty code, then the creation throws immediately, with exactly
+				// the same behavior as would arise if the first byte in the init code were an invalid
+				// opcode. This applies retroactively starting from genesis.
+				if self.state.exists_and_has_code_or_nonce(&params.address)? {
+					return Err(vm::Error::OutOfGas);
+				}
+
+				let nonce_offset = if schedule.no_empty { 1 } else { 0 }.into();
+				let prev_balance = state.balance(&params.address)?;
+
+				if let ActionValue::Transfer(val) = params.value {
+					self.state.sub_balance(&params.sender, &val, &mut substate.to_cleanup_mode(&schedule))?;
+					self.state.new_contract(&params.address, val + prev_bal, nonce_offset);
+				} else {
+					self.state.new_contract(&params.address, prev_bal, nonce_offset);
+				}
+
+				let gas = params.gas;
+				let created = params.address;
+
+				let mut ext = self.as_externalities(OriginInfo::from(params), unconfirmed_substate, OutputPolicy::InitContract(output), static_call);
+
+				let res = match vm.start(&mut ext) {
+					Ok(val) => Ok(val),
+					Err(ResumableError::Trap) => return Err(ResumableError::Trap),
+					Err(ResumableError::Normal(err)) => Err(err),
+				};
+
+				enact_result(&res, state, substate, unconfirmed_state)
+			}
+		}
+	}
+
+	pub fn resume<B: 'a + StateBackend>(
+		&mut self,
+		state: &mut State<B>,
+		substate: &mut Substate,
+		resume_value: ResumeValue,
+	) -> vm::ResumableResult<FinalizationResult> {
+		match &mut self.kind {
+			&mut CallCreateExecutiveKind::Transfer(_) => panic!("Never resumable; TODO proof"),
+			&mut CallCreateExecutiveKind::Builtin(_, _) => panic!("Never resumable; TODO proof"),
+
+			&mut CallCreateExecutiveKind::CallVm(ref params, ref mut vm, ref mut unconfirmed_substate) => {
+				let static_call = params.call_type == CallType::StaticCall;
+				let mut ext = self.as_externalities(OriginInfo::from(params), unconfirmed_substate, OutputPolicy::Return(output), static_call);
+
+				let res = match vm.resume(&mut ext, resume_value) {
+					Ok(val) => Ok(val),
+					Err(ResumableError::Trap) => return Err(ResumableError::Trap),
+					Err(ResumableError::Normal(err)) => Err(err),
+				};
+
+				enact_result(&res, state, substate, unconfirmed_state)
+			},
+
+			&mut CallCreateExecutiveKind::CreateVm(ref params, ref mut vm, ref mut unconfirmed_substate) => {
+				let static_call = params.call_type == CallType::StaticCall;
+				let mut ext = self.as_externalities(OriginInfo::from(params), unconfirmed_substate, OutputPolicy::Return(output), static_call);
+
+				let res = match vm.resume(&mut ext, resume_value) {
+					Ok(val) => Ok(val),
+					Err(ResumableError::Trap) => return Err(ResumableError::Trap),
+					Err(ResumableError::Normal(err)) => Err(err),
+				};
+
+				enact_result(&res, state, substate, unconfirmed_state)
+			},
+		}
+	}
+
+	pub fn consume<B: 'a + StateBackend>(
+		mut self,
+		state: &mut State<B>,
+		substate: &mut Substate,
+		resume_value: ResumeValue,
+	) -> vm::Result<FinalizationResult> {
+		let mut callstack: Vec<(ActionKind, CallCreateExecutive<'a>)> = Vec::new();
+
+		let mut res = self.start(state, substate, output);
+
+		loop {
+			match res {
+				Ok(res) => {
+					if callstack.len() == 0 {
+						return res;
+					} else {
+						let (action, _) = callstack.pop();
+						let value = match action {
+							ActionKind::Call => ResumeValue::Call(res.into()),
+							ActionKind::Create => ResumeValue::Create(res.into()),
+						};
+
+						match callstack.last() {
+							Some(last) => {
+								suboutput.clear();
+								res = last.1.resume(state, substate, suboutput);
+							}
+						}
+						if callstack.len() == 0 {
+							res = self.resume(state, substate, output);
+						} else {
+							res = callstack.last
+						}
+					}
+				},
+				Err(ResumableError::Trap(ResumableTrapKind::Create(params, static_flag))) => {
+
+				}
+			}
+		}
+	}
+}
+
+fn enact_result(result: &vm::Result<FinalizationResult>, state: &mut State<B>, substate: &mut Substate, unconfirmed_substate: Substate) {
+	match *result {
+		Err(vm::Error::OutOfGas)
+			| Err(vm::Error::BadJumpDestination {..})
+			| Err(vm::Error::BadInstruction {.. })
+			| Err(vm::Error::StackUnderflow {..})
+			| Err(vm::Error::BuiltIn {..})
+			| Err(vm::Error::Wasm {..})
+			| Err(vm::Error::OutOfStack {..})
+			| Err(vm::Error::MutableCallInStaticContext)
+			| Err(vm::Error::OutOfBounds)
+			| Err(vm::Error::Reverted)
+			| Ok(FinalizationResult { apply_state: false, .. }) => {
+				self.state.revert_to_checkpoint();
+			},
+		Ok(_) | Err(vm::Error::Internal(_)) => {
+			self.state.discard_checkpoint();
+			substate.accrue(un_substate);
+		}
+	}
+}
+
 /// Transaction executor.
 pub struct Executive<'a, B: 'a> {
 	state: &'a mut State<B>,
@@ -405,19 +713,6 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 		vm_tracer: &mut V
 	) -> vm::Result<FinalizationResult> where T: Tracer, V: VMTracer {
 
-		trace!("Executive::call(params={:?}) self.env_info={:?}, static={}", params, self.info, self.static_flag);
-		if (params.call_type == CallType::StaticCall ||
-				((params.call_type == CallType::Call) &&
-				self.static_flag))
-			&& params.value.value() > 0.into() {
-			return Err(vm::Error::MutableCallInStaticContext);
-		}
-
-		// backup used in case of running out of gas
-		self.state.checkpoint();
-
-		let schedule = self.schedule;
-
 		// at first, transfer value to destination
 		if let ActionValue::Transfer(val) = params.value {
 			self.state.transfer_balance(&params.sender, &params.address, &val, substate.to_cleanup_mode(&schedule))?;
@@ -425,82 +720,14 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 
 		// if destination is builtin, try to execute it
 		if let Some(builtin) = self.machine.builtin(&params.code_address, self.info.number) {
-			// Engines aren't supposed to return builtins until activation, but
-			// prefer to fail rather than silently break consensus.
-			if !builtin.is_active(self.info.number) {
-				panic!("Consensus failure: engine implementation prematurely enabled built-in at {}", params.code_address);
-			}
 
-			let default = [];
-			let data = if let Some(ref d) = params.data { d as &[u8] } else { &default as &[u8] };
 
-			let trace_info = tracer.prepare_trace_call(&params);
 
-			let cost = builtin.cost(data);
-			if cost <= params.gas {
-				let mut builtin_out_buffer = Vec::new();
-				let result = {
-					let mut builtin_output = BytesRef::Flexible(&mut builtin_out_buffer);
-					builtin.execute(data, &mut builtin_output)
-				};
-				if let Err(e) = result {
-					self.state.revert_to_checkpoint();
-					let evm_err: vm::Error = e.into();
-					tracer.trace_failed_call(trace_info, vec![], evm_err.clone().into());
-					Err(evm_err)
-				} else {
-					self.state.discard_checkpoint();
-					output.write(0, &builtin_out_buffer);
-
-					// Trace only top level calls and calls with balance transfer to builtins. The reason why we don't
-					// trace all internal calls to builtin contracts is that memcpy (IDENTITY) is a heavily used
-					// function.
-					let is_transferred = match params.value {
-						ActionValue::Transfer(value) => value != U256::zero(),
-						ActionValue::Apparent(_) => false,
-					};
-					if self.depth == 0 || is_transferred {
-						let mut trace_output = tracer.prepare_trace_output();
-						if let Some(out) = trace_output.as_mut() {
-							*out = output.to_owned();
-						}
-
-						tracer.trace_call(
-							trace_info,
-							cost,
-							trace_output,
-							vec![]
-						);
-					}
-
-					let out_len = builtin_out_buffer.len();
-					Ok(FinalizationResult {
-						gas_left: params.gas - cost,
-						return_data: ReturnData::new(builtin_out_buffer, 0, out_len),
-						apply_state: true,
-					})
-				}
-			} else {
-				// just drain the whole gas
-				self.state.revert_to_checkpoint();
-
-				tracer.trace_failed_call(trace_info, vec![], vm::Error::OutOfGas.into());
-
-				Err(vm::Error::OutOfGas)
-			}
 		} else {
-			let trace_info = tracer.prepare_trace_call(&params);
-			let mut trace_output = tracer.prepare_trace_output();
-			let mut subtracer = tracer.subtracer();
 
-			let gas = params.gas;
 
 			if params.code.is_some() {
-				// part of substate that may be reverted
-				let mut unconfirmed_substate = Substate::new();
 
-				// TODO: make ActionParams pass by ref then avoid copy altogether.
-				let mut subvmtracer = vm_tracer.prepare_subtrace(params.code.as_ref().expect("scope is conditional on params.code.is_some(); qed"));
 
 				let res = {
 					self.exec_vm(params, &mut unconfirmed_substate, OutputPolicy::Return(output, trace_output.as_mut()), &mut subtracer, &mut subvmtracer)
@@ -528,15 +755,6 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 				trace!(target: "executive", "enacted: substate={:?}\n", substate);
 				res
 			} else {
-				// otherwise it's just a basic transaction, only do tracing, if necessary.
-				self.state.discard_checkpoint();
-
-				tracer.trace_call(trace_info, U256::zero(), trace_output, vec![]);
-				Ok(FinalizationResult {
-					gas_left: params.gas,
-					return_data: ReturnData::empty(),
-					apply_state: true,
-				})
 			}
 		}
 	}
@@ -552,43 +770,6 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 		tracer: &mut T,
 		vm_tracer: &mut V,
 	) -> vm::Result<FinalizationResult> where T: Tracer, V: VMTracer {
-
-		// EIP-684: If a contract creation is attempted, due to either a creation transaction or the
-		// CREATE (or future CREATE2) opcode, and the destination address already has either
-		// nonzero nonce, or nonempty code, then the creation throws immediately, with exactly
-		// the same behavior as would arise if the first byte in the init code were an invalid
-		// opcode. This applies retroactively starting from genesis.
-		if self.state.exists_and_has_code_or_nonce(&params.address)? {
-			return Err(vm::Error::OutOfGas);
-		}
-
-		trace!("Executive::create(params={:?}) self.env_info={:?}, static={}", params, self.info, self.static_flag);
-		if params.call_type == CallType::StaticCall || self.static_flag {
-			let trace_info = tracer.prepare_trace_create(&params);
-			tracer.trace_failed_create(trace_info, vec![], vm::Error::MutableCallInStaticContext.into());
-			return Err(vm::Error::MutableCallInStaticContext);
-		}
-
-		// backup used in case of running out of gas
-		self.state.checkpoint();
-
-		// part of substate that may be reverted
-		let mut unconfirmed_substate = Substate::new();
-
-		// create contract and transfer value to it if necessary
-		let schedule = self.schedule;
-		let nonce_offset = if schedule.no_empty {1} else {0}.into();
-		let prev_bal = self.state.balance(&params.address)?;
-		if let ActionValue::Transfer(val) = params.value {
-			self.state.sub_balance(&params.sender, &val, &mut substate.to_cleanup_mode(&schedule))?;
-			self.state.new_contract(&params.address, val + prev_bal, nonce_offset);
-		} else {
-			self.state.new_contract(&params.address, prev_bal, nonce_offset);
-		}
-
-		let trace_info = tracer.prepare_trace_create(&params);
-		let mut trace_output = tracer.prepare_trace_output();
-		let mut subtracer = tracer.subtracer();
 		let gas = params.gas;
 		let created = params.address.clone();
 
@@ -698,28 +879,6 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 					state_diff: None,
 				})
 			},
-		}
-	}
-
-	fn enact_result(&mut self, result: &vm::Result<FinalizationResult>, substate: &mut Substate, un_substate: Substate) {
-		match *result {
-			Err(vm::Error::OutOfGas)
-				| Err(vm::Error::BadJumpDestination {..})
-				| Err(vm::Error::BadInstruction {.. })
-				| Err(vm::Error::StackUnderflow {..})
-				| Err(vm::Error::BuiltIn {..})
-				| Err(vm::Error::Wasm {..})
-				| Err(vm::Error::OutOfStack {..})
-				| Err(vm::Error::MutableCallInStaticContext)
-				| Err(vm::Error::OutOfBounds)
-				| Err(vm::Error::Reverted)
-				| Ok(FinalizationResult { apply_state: false, .. }) => {
-					self.state.revert_to_checkpoint();
-			},
-			Ok(_) | Err(vm::Error::Internal(_)) => {
-				self.state.discard_checkpoint();
-				substate.accrue(un_substate);
-			}
 		}
 	}
 }

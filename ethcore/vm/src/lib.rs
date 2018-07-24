@@ -48,5 +48,7 @@ pub trait Vm {
 	/// This function should be used to execute transaction.
 	/// It returns either an error, a known amount of gas left, or parameters to be used
 	/// to compute the final gas left.
-	fn exec(&mut self, ext: &mut Ext) -> Result<GasLeft>;
+	fn start(&mut self, ext: &mut Ext) -> ResumableResult<GasLeft>;
+	/// Resume an execution.
+	fn resume(&mut self, ext: &mut Ext) -> ResumableResult<GasLeft>;
 }

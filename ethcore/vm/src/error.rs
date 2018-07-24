@@ -19,6 +19,15 @@
 use std::fmt;
 use ethtrie;
 
+/// Resumable VM errors.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResumableError {
+	/// An executive trap indicate that the VM should resume and hand over execution to other VMs.
+	Trap,
+	/// Normal exiting error.
+	Normal(Error),
+}
+
 /// VM errors.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -108,3 +117,4 @@ impl fmt::Display for Error {
 }
 
 pub type Result<T> = ::std::result::Result<T, Error>;
+pub type ResumableResult<T> = ::std::result::Result<T, ResumableError>;

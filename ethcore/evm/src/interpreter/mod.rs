@@ -198,13 +198,13 @@ impl<Cost: CostType> vm::Vm for Interpreter<Cost> {
 
 impl<Cost: CostType> Interpreter<Cost> {
 	/// Create a new `Interpreter` instance with shared cache.
-	pub fn new(mut params: ActionParams, cache: Arc<SharedCache>, ext: &vm::Ext) -> vm::Result<Interpreter<Cost>> {
+	pub fn new(mut params: ActionParams, cache: Arc<SharedCache>, schedule: &Schedule, depth: usize) -> vm::Result<Interpreter<Cost>> {
 		let reader = CodeReader::new(params.code.take().expect("VM always called with code; qed"));
 		let params = InterpreterParams::from(params);
-		let informant = informant::EvmInformant::new(ext.depth());
+		let informant = informant::EvmInformant::new(depth);
 		let valid_jump_destinations = None;
 		let gasometer = Gasometer::<Cost>::new(Cost::from_u256(params.gas)?);
-		let stack = VecStack::with_capacity(ext.schedule().stack_limit, U256::zero());
+		let stack = VecStack::with_capacity(schedule.stack_limit, U256::zero());
 
 		Ok(Interpreter {
 			cache, params, reader, informant,
